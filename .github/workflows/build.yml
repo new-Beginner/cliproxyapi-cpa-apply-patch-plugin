@@ -33,6 +33,14 @@ jobs:
           go build -buildmode=c-shared -ldflags="-s -w" -o apply_patch.dll .
           if (Test-Path apply_patch.h) { Remove-Item apply_patch.h -Force }
 
+          $tag = "${{ github.ref_name }}"
+          $ver = if ($tag -match '^v?([0-9]+\.[0-9]+\.[0-9]+.*)$') { $matches[1] } else { "1.2.0" }
+          $zipName = "apply_patch_${ver}_windows_amd64.zip"
+
+          Compress-Archive -Path apply_patch.dll -DestinationPath $zipName -Force
+          $hash = (Get-FileHash -Path $zipName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $zipName`n" | Out-File -FilePath checksums.txt -Encoding ascii
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -43,6 +51,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
         with:
-          files: apply_patch.dll
+          files: |
+            apply_patch.dll
+            apply_patch_*_windows_amd64.zip
+            checksums.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
