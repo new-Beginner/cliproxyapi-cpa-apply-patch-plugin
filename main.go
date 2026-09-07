@@ -1,4 +1,14 @@
 package main
+// Package main implements the CPA Apply Patch Plugin.
+//
+// This plugin bridges Codex Desktop and third-party LLMs (Google Gemini, Anthropic Claude,
+// DeepSeek, etc.) via CLIProxyAPI:
+// 1. Native apply_patch tool calling: injects Codex V4A patch schema, intercepts tool invocations,
+//    and repacks upstream function calls into Codex 5-frame custom_tool_call SSE stream for TurnDiff cards.
+// 2. OAuth Relay Authentication: leverages FrontendAuthProvider to pass Codex's ChatGPT OAuth JWT tokens,
+//    preserving the user's ChatGPT Pro subscription quota limits and avatar.
+// 3. Multi-turn history bridging: translates custom_tool_call and custom_tool_call_output items.
+// 4. Zero-crash C ABI panic isolation with full recover guards.
 
 /*
 #include <stdint.h>

@@ -5,9 +5,9 @@
   <a href="README_EN.md">English</a>
 </p>
 
-> **专为接入 Codex 桌面端的第三方大模型（Google Gemini、Anthropic Claude、DeepSeek 等）打造的官方标准 C ABI 原生补丁与 OAuth 中继插件。**
+> **专为接入 Codex 桌面端的第三方大模型（Google Gemini、Anthropic Claude、DeepSeek 等）打造的官方标准 C ABI 原生补丁工具调用与 OAuth 中继插件。**
 >
-> 无需任何外部 Python 脚本，单个 DLL 即插即用。实现官方原汁原味的文件变化对比卡片（TurnDiff），并完美保留 ChatGPT Pro 账号登录态与 5 小时限额额度条！
+> 无需任何外部 Python 脚本，单个 DLL 即插即用。**全面支持第三方模型原生调用 `apply_patch` 工具**进行精准代码修改与版本比对，完美呈现官方文件修改对比卡片（TurnDiff），并无缝保留 ChatGPT Pro 账号登录态与 5 小时限额额度条！
 
 ---
 
@@ -15,8 +15,8 @@
 
 在将外部大模型（如 Gemini、Claude、DeepSeek）通过 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 接入 Codex 时，开发者通常面临三大难题：
 
-1. **补丁卡片缺失，体验降级为丑陋的 Markdown**：
-   Codex 官方客户端针对 OpenAI 自身模型设计了一套私有的 `custom_tool_call`（Freeform Patch）协议。当接入第三方模型时，Codex 无法激活原生文件修改卡片，只能退化为模型直接输出 Markdown 文本块或调用普通 MCP 工具，丢失了文件名、代码行数增减徽章（`+1, -1`）及图形化【打开/对比】按钮。
+1. **无法调用原生 `apply_patch` 工具，补丁体验降级**：
+   Codex 官方客户端针对 OpenAI 自身模型设计了一套私有的 `custom_tool_call`（Freeform Patch）协议。当接入第三方模型时，第三方模型无法正确识别和发起该私有工具调用，只能退化为输出普通 Markdown 文本块或改用 Shell 命令（如 `cat <<EOF`）全量覆写文件，不仅丢失了精准差异更新能力，也无法唤起带有文件名、代码行数增减徽章（`+1, -1`）和【打开/对比】按钮的原生文件修改卡片。
 2. **第三方代理拦截，导致官方 Pro 额度条与头像消失**：
    若直接使用第三方代理 API Key，Codex 会被强制设置为 API Key 模式，状态栏将无法显示官方 ChatGPT Pro 5 小时使用限额（Usage Limits）与头像。而如果开启 `auth_mode: "chatgpt"`，Codex 向本地代理发送的 ChatGPT OAuth JWT 令牌又会被代理视为无效凭证而返回 `401 Unauthorized`。
 3. **传统方案依赖外部脚本或修改内核，维护成本极高**：
@@ -28,7 +28,12 @@
 
 ## ✨ 核心功能
 
-### 1. 🎨 官方原生文件变化卡片（TurnDiff Native Card）
+### 1. 🛠️ 原生 `apply_patch` 工具调用闭环（Native Tool Calling & Execution）
+- **工具声明注入与适配**：在请求入站时，自动向外部模型注入符合 Codex V4A 补丁规范的标准 `apply_patch` 工具定义，使 Gemini、Claude、DeepSeek 等第三方模型能够精准识别并主动发起针对文件的增量修改调用；
+- **V4A 提示词智能增强**：自动注入 Unified Diff 格式指引，引导模型使用精准的行修改语法，告别全文件重写带来的性能损耗与上下文浪费；
+- **多轮会话参数与输出闭环**：模型调用 `apply_patch` 后，插件自动将客户端执行结果以 `custom_tool_call_output` 平滑映射回模型，确保多轮上下文持续感知修改结果与冲突。
+
+### 2. 🎨 官方原生文件变化卡片（TurnDiff Native Card）
 - **双向协议转译**：在请求端将 Codex 的 `custom: apply_patch` 声明透明转换为通用模型支持的标准 Function Calling 格式，并注入 V4A Unified Diff 格式指引；
 - **5 帧事件流重组**：在响应端实时截获上游模型的函数调用，精准重构为 Codex 渲染引擎严格要求的 5 帧原生 SSE 事件序列：
   - `response.output_item.added` (`type: "custom_tool_call"`)
@@ -38,16 +43,16 @@
   - `response.completed` (整体响应完结)
 - **完美视觉呈现**：直接在 Codex UI 中弹出官方原生文件对比卡片，支持直观的绿红增减行数标识与一键回跳对比。
 
-### 2. 🔐 ChatGPT OAuth 登录中继（OAuth Relay Authentication）
+### 3. 🔐 ChatGPT OAuth 登录中继（OAuth Relay Authentication）
 - 基于 CLIProxyAPI 官方 `FrontendAuthProvider` 扩展能力；
 - 自动识别并放行 Codex 发送的官方 ChatGPT OAuth JWT 令牌（`Bearer eyJ...`），同时兼顾 `sk-geminipro` 等本地 API Key；
 - **效果**：Codex 状态栏可**同时保持官方登录态，实时查看 Pro 订阅限额、头像与用量**，而核心推理请求直接走本地代理调度到外部模型。
 
-### 3. 🛡️ 全链路 Panic 隔离与稳定性保障（Zero-Crash Guard）
+### 4. 🛡️ 全链路 Panic 隔离与稳定性保障（Zero-Crash Guard）
 - 导出给宿主进程的所有 C ABI 入口（`cliproxy_plugin_init`、`cliproxyPluginCall`、`cliproxyPluginFree`）均配置全量异常捕获与恢复（`defer recover()`）；
 - 零正则、全原生切片处理，彻底杜绝插件运行时 panic 引发 `cli-proxy-api.exe` 内核崩溃闪退。
 
-### 4. 🚀 零外部依赖，极简即插即用
+### 5. 🚀 零外部依赖，极简即插即用
 - 纯 Go 编译为单个动态链接库（`apply_patch.dll`），完全不需要系统安装 Python，不需要运行任何 `.bat` 或 `.ps1` 辅助程序；
 - 随内核启动而自动加载，内核升级覆盖亦不影响插件独立存续。
 
@@ -57,6 +62,7 @@
 
 | 特性对比 | 裸代理直连 | 传统 MCP 模式 | 外部 Python 脚本模式 | **本插件 (`apply_patch.dll`)** |
 | :--- | :---: | :---: | :---: | :---: |
+| **apply_patch 工具调用** | ❌ 无法识别/报错 | ⚠️ 降级为外部 MCP | ⚠️ 易被覆盖 | **✅ 原生支持与多轮闭环** |
 | **文件变化卡片** | ❌ 纯文本/Markdown | ⚠️ 仅标准工具弹窗 | ⚠️ 需手动刷配置 | **✅ 100% 官方原生 TurnDiff 卡片** |
 | **行数变化徽章 (`+1/-1`)** | ❌ 无 | ❌ 无 | ⚠️ 取决于脚本 | **✅ 完美支持** |
 | **Pro 额度条/头像保留** | ❌ 丢失 | ❌ 丢失 | ❌ 冲突报错 | **✅ 完美保留（OAuth Relay）** |

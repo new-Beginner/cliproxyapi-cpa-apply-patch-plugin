@@ -5,9 +5,9 @@
   <a href="README_EN.md">English</a>
 </p>
 
-> **A standardized C ABI dynamic plugin for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) designed to bridge third-party models (Google Gemini, Anthropic Claude, DeepSeek, etc.) with Codex Desktop.**
+> **A standardized C ABI dynamic plugin for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) enabling native `apply_patch` tool calling and OAuth relay for third-party LLMs (Google Gemini, Anthropic Claude, DeepSeek, etc.) in Codex Desktop.**
 >
-> Delivers 100% native file diff cards (TurnDiff) without any external Python scripts, while seamlessly preserving your official ChatGPT Pro account session, avatar, and 5-hour quota bar!
+> Zero external Python scripts, single DLL plug-and-play. **Enables external LLMs to natively invoke Codex's `apply_patch` tool with full execution feedback**, renders 100% authentic file diff cards (TurnDiff), and preserves your official ChatGPT Pro session, avatar, and 5-hour quota bar!
 
 ---
 
@@ -15,8 +15,8 @@
 
 When connecting external LLMs (e.g. Gemini, Claude, DeepSeek) to Codex via proxy gateways like CLIProxyAPI, developers face three major obstacles:
 
-1. **Missing Native Diff Cards (Degraded into Markdown Code Blocks)**:
-   Codex uses a private `custom_tool_call` (Freeform Patch) protocol for OpenAI native models. When routed to external models, Codex cannot activate its native diff card, falling back to raw Markdown code blocks or generic MCP tools, losing file paths, line diff badges (`+1, -1`), and the graphical [Open/Compare] buttons.
+1. **Inability to Invoke Native `apply_patch` Tool**:
+   Codex uses a private `custom_tool_call` (Freeform Patch) protocol for OpenAI native models. When routed to external models, third-party LLMs cannot correctly recognize or invoke this tool, falling back to raw Markdown code blocks or destructive shell command rewrites (e.g. `cat <<EOF`), losing fine-grained diff patching and preventing Codex from activating its native TurnDiff cards (`+1, -1` badges and [Open/Compare] buttons).
 2. **Third-Party Key Requirement Breaks Official Pro Quota & Avatar**:
    Using a static gateway API key forces Codex into `auth_mode: "apikey"`, which prevents the Codex client from fetching user profile and ChatGPT Pro 5-hour usage limit bars from `chatgpt.com/backend-api`. Conversely, if `auth_mode: "chatgpt"` is preserved, the proxy rejects the incoming ChatGPT OAuth JWT token with `401 Unauthorized`.
 3. **Fragile External Scripts & Core Binary Tampering**:
@@ -28,7 +28,12 @@ When connecting external LLMs (e.g. Gemini, Claude, DeepSeek) to Codex via proxy
 
 ## ✨ Key Features
 
-### 1. 🎨 Official Native TurnDiff Cards
+### 1. 🛠️ Native `apply_patch` Tool Calling & Execution Loop
+- **Tool Definition Injection & Adaptation**: Transparently injects the official Codex V4A patch schema into the model's available tools on request ingress, empowering external models (Gemini, Claude, DeepSeek) to recognize and actively invoke surgical file patches;
+- **V4A Guidance Enhancement**: Automatically injects Unified Diff prompt guidelines, ensuring models output correct chunk markers without resorting to inefficient full-file rewrites;
+- **Multi-Turn Argument & Output Bridging**: Seamlessly maps `custom_tool_call_output` responses back into the model's history, maintaining full context awareness of patch results across multiple turns.
+
+### 2. 🎨 Official Native TurnDiff Cards
 - **Bidirectional Protocol Translation**: Translates Codex's private `custom: apply_patch` tool declaration into standard JSON Function Calling schema on the request side, injecting V4A Unified Diff system prompt guidelines;
 - **5-Frame Event Stream Reconstruction**: Intercepts upstream model function calls and precisely repacks them into the exact 5-frame SSE event stream expected by Codex's native diff rendering engine:
   - `response.output_item.added` (`type: "custom_tool_call"`)
@@ -38,16 +43,16 @@ When connecting external LLMs (e.g. Gemini, Claude, DeepSeek) to Codex via proxy
   - `response.completed` (turn finished)
 - **Flawless Visual Experience**: Directly launches the official TurnDiff card in Codex UI with line counter badges and one-click code inspection.
 
-### 2. 🔐 ChatGPT OAuth Relay Authentication
+### 3. 🔐 ChatGPT OAuth Relay Authentication
 - Leverages CLIProxyAPI's `FrontendAuthProvider` plugin capability;
 - Automatically authenticates incoming ChatGPT OAuth JWT tokens (`Bearer eyJ...`) sent by Codex, while retaining full compatibility with local keys like `sk-geminipro`;
 - **Result**: Codex status bar continues to display **official ChatGPT Pro subscription limits and avatar**, while inference traffic routes locally through external models.
 
-### 3. 🛡️ Zero-Crash C ABI Panic Isolation
+### 4. 🛡️ Zero-Crash C ABI Panic Isolation
 - All exported C ABI boundaries (`cliproxy_plugin_init`, `cliproxyPluginCall`, `cliproxyPluginFree`) are protected with full `defer recover()` guards;
 - Zero regex, memory-safe pure Go string slice operations prevent any possibility of runtime panics causing the host `cli-proxy-api.exe` process to crash.
 
-### 4. 🚀 Zero-Touch Self-Contained Deployment
+### 5. 🚀 Zero-Touch Self-Contained Deployment
 - Pure Go binary compiling into a single DLL (`apply_patch.dll`);
 - No Python runtime required, no `.bat` or `.ps1` background scripts;
 - Independent of proxy core binaries: persists safely across CLIProxyAPI core updates.
@@ -58,6 +63,7 @@ When connecting external LLMs (e.g. Gemini, Claude, DeepSeek) to Codex via proxy
 
 | Capability | Raw Gateway | Generic MCP Server | External Python Script | **This Plugin (`apply_patch.dll`)** |
 | :--- | :---: | :---: | :---: | :---: |
+| **apply_patch Tool Calling** | ❌ Rejected / Error | ⚠️ Generic MCP fallback | ⚠️ Prone to overwrite | **✅ Native Support & Multi-Turn Loop** |
 | **Native TurnDiff Card** | ❌ Markdown only | ⚠️ Generic tool popup | ⚠️ Requires manual script | **✅ 100% Native TurnDiff Card** |
 | **Line Counter Badges (`+1/-1`)** | ❌ None | ❌ None | ⚠️ Unstable | **✅ Fully Supported** |
 | **Pro Quota / Avatar Retention** | ❌ Lost | ❌ Lost | ❌ Auth Conflict | **✅ Fully Preserved (OAuth Relay)** |
