@@ -7,16 +7,21 @@
 
 > **A standardized C ABI dynamic plugin for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) enabling native `apply_patch` tool calling and OAuth relay for third-party LLMs (Google Gemini, Anthropic Claude, DeepSeek, etc.) in Codex Desktop.**
 >
-> Zero external Python scripts, single DLL plug-and-play. **Enables external LLMs to natively invoke Codex's `apply_patch` tool with full execution feedback**, renders 100% authentic file diff cards (TurnDiff), and preserves your official ChatGPT Pro session, avatar, and 5-hour quota bar!
+> Zero external Python scripts, single DLL plug-and-play. **Resolves the fundamental barrier preventing third-party models from calling Codex's native `apply_patch` Freeform tool**, enables seamless tool declaration injection and multi-turn execution feedback, activates official TurnDiff cards, and preserves your official ChatGPT Pro session, avatar, and 5-hour quota bar!
 
 ---
 
-## 💡 Why This Plugin? (Pain Points Solved)
+## 💡 Why This Plugin? (Root Problem Analysis)
 
-When connecting external LLMs (e.g. Gemini, Claude, DeepSeek) to Codex via proxy gateways like CLIProxyAPI, developers face three major obstacles:
+When connecting third-party LLMs (e.g. Google Gemini, Anthropic Claude, DeepSeek) to Codex Desktop via proxy gateways, the primary obstacle is an **architectural tool protocol mismatch**:
 
-1. **Inability to Invoke Native `apply_patch` Tool**:
-   Codex uses a private `custom_tool_call` (Freeform Patch) protocol for OpenAI native models. When routed to external models, third-party LLMs cannot correctly recognize or invoke this tool, falling back to raw Markdown code blocks or destructive shell command rewrites (e.g. `cat <<EOF`), losing fine-grained diff patching and preventing Codex from activating its native TurnDiff cards (`+1, -1` badges and [Open/Compare] buttons).
+1. **Root Problem: Third-party LLMs cannot recognize or invoke Codex's proprietary `apply_patch` Freeform Tool**
+   - **Proprietary Freeform Tool Protocol**: Codex Desktop implements a private `custom_tool_call` (Freeform Patch) mechanism specifically for OpenAI models. Instead of taking standard structured JSON parameters, it streams raw V4A Unified Diff patch text directly in an unstructured payload;
+   - **Ecosystem Incompatibility**: Models like Gemini, Claude, and DeepSeek strictly adhere to standard JSON Schema Function Calling specifications and **cannot natively parse or trigger Codex's proprietary Freeform tools**;
+   - **The Chain of Failures Caused by Inability to Invoke `apply_patch`**:
+     - 💥 **Destructive & Uncontrolled File Mutation**: Unable to call `apply_patch` for surgical diffs, the model is forced to dump massive Markdown code blocks in chat or execute crude terminal commands (such as `cat <<EOF > file`) to completely overwrite files. This wastes tokens, inflates latency, and frequently introduces regressions or accidental deletions;
+     - 🎨 **Complete UI & Visual Card Breakdown**: Because the client engine receives no valid `custom_tool_call` event stream, Codex Desktop **fails to activate its official native TurnDiff cards** (the interactive diff view with file paths, line change counters `+1, -1`, and graphical [Open/Compare] buttons), reducing the user interface to plain chat text;
+     - 🔄 **Broken Multi-Turn Review Feedback**: The model receives no structured `custom_tool_call_output` execution results from the client, causing it to lose context and hallucinate during multi-turn refactoring tasks.
 2. **Third-Party Key Requirement Breaks Official Pro Quota & Avatar**:
    Using a static gateway API key forces Codex into `auth_mode: "apikey"`, which prevents the Codex client from fetching user profile and ChatGPT Pro 5-hour usage limit bars from `chatgpt.com/backend-api`. Conversely, if `auth_mode: "chatgpt"` is preserved, the proxy rejects the incoming ChatGPT OAuth JWT token with `401 Unauthorized`.
 3. **Fragile External Scripts & Core Binary Tampering**:
@@ -28,13 +33,13 @@ When connecting external LLMs (e.g. Gemini, Claude, DeepSeek) to Codex via proxy
 
 ## ✨ Key Features
 
-### 1. 🛠️ Native `apply_patch` Tool Calling & Execution Loop
-- **Tool Definition Injection & Adaptation**: Transparently injects the official Codex V4A patch schema into the model's available tools on request ingress, empowering external models (Gemini, Claude, DeepSeek) to recognize and actively invoke surgical file patches;
+### 1. 🛠️ Native `apply_patch` Freeform Dynamic Bridging & Tool Calling Loop
+- **Freeform ↔ Function Calling Dual-Bridge**: On inbound requests, automatically bridges Codex's `custom: apply_patch` Freeform declaration into standard JSON Schema function tool specifications that external models understand, enabling surgical, line-by-line diff edits;
 - **V4A Guidance Enhancement**: Automatically injects Unified Diff prompt guidelines, ensuring models output correct chunk markers without resorting to inefficient full-file rewrites;
 - **Multi-Turn Argument & Output Bridging**: Seamlessly maps `custom_tool_call_output` responses back into the model's history, maintaining full context awareness of patch results across multiple turns.
 
 ### 2. 🎨 Official Native TurnDiff Cards
-- **Bidirectional Protocol Translation**: Translates Codex's private `custom: apply_patch` tool declaration into standard JSON Function Calling schema on the request side, injecting V4A Unified Diff system prompt guidelines;
+- **Protocol-Level Cloaking**: Transparently restores standard model function calls back into Codex's private Freeform patch protocol;
 - **5-Frame Event Stream Reconstruction**: Intercepts upstream model function calls and precisely repacks them into the exact 5-frame SSE event stream expected by Codex's native diff rendering engine:
   - `response.output_item.added` (`type: "custom_tool_call"`)
   - `response.custom_tool_call_input.delta` (incremental patch chunk)

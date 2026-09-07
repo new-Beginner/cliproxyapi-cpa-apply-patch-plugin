@@ -7,16 +7,21 @@
 
 > **专为接入 Codex 桌面端的第三方大模型（Google Gemini、Anthropic Claude、DeepSeek 等）打造的官方标准 C ABI 原生补丁工具调用与 OAuth 中继插件。**
 >
-> 无需任何外部 Python 脚本，单个 DLL 即插即用。**全面支持第三方模型原生调用 `apply_patch` 工具**进行精准代码修改与版本比对，完美呈现官方文件修改对比卡片（TurnDiff），并无缝保留 ChatGPT Pro 账号登录态与 5 小时限额额度条！
+> 无需任何外部 Python 脚本，单个 DLL 即插即用。**解决第三方模型无法调用 Codex 原生 `apply_patch` Freeform 自由格式工具的根本痛点**，打通工具声明注入、参数转译与响应事件闭环，完美唤起官方文件修改对比卡片（TurnDiff），并无缝保留 ChatGPT Pro 账号登录态与 5 小时限额额度条！
 
 ---
 
-## 💡 为什么需要本插件？（解决的痛点）
+## 💡 为什么需要本插件？（根本痛点解析）
 
-在将外部大模型（如 Gemini、Claude、DeepSeek）通过 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 接入 Codex 时，开发者通常面临三大难题：
+在将第三方大模型（如 Google Gemini、Anthropic Claude、DeepSeek 等）通过代理网关接入 Codex 桌面端时，核心矛盾在于 **工具协议体系的不兼容**：
 
-1. **无法调用原生 `apply_patch` 工具，补丁体验降级**：
-   Codex 官方客户端针对 OpenAI 自身模型设计了一套私有的 `custom_tool_call`（Freeform Patch）协议。当接入第三方模型时，第三方模型无法正确识别和发起该私有工具调用，只能退化为输出普通 Markdown 文本块或改用 Shell 命令（如 `cat <<EOF`）全量覆写文件，不仅丢失了精准差异更新能力，也无法唤起带有文件名、代码行数增减徽章（`+1, -1`）和【打开/对比】按钮的原生文件修改卡片。
+1. **根本痛点：第三方大模型无法识别并调用 Codex 原生的 `apply_patch` Freeform 工具**
+   - **私有 Freeform 协议**：Codex 官方客户端针对自身模型设计了一套私有的 `custom_tool_call`（即 Freeform Patch 工具机制）。该工具的入参与常规结构化 JSON 参数不同，而是直接以流式纯文本传输 V4A Unified Diff 差异数据；
+   - **第三方生态阻断**：Gemini、Claude、DeepSeek 等外部模型天然遵循严格的 JSON Schema Function Calling 契约，**无法识别、更无法主动触发这种私有的 Freeform 工具调用**；
+   - **由“无法调用”引发的一系列连锁灾难**：
+     - 💥 **文件修改行为粗暴失控**：由于无法调用 `apply_patch` 进行局部增量修补，模型只能被迫退化为在回复中输出冗长的 Markdown 代码块，或者借助终端 Shell 命令（如 `cat <<EOF > file`）进行全量覆写。这种方式极易破坏既有代码、丢失未修改逻辑，并严重浪费上下文与 token；
+     - 🎨 **UI 视觉与对比交互完全破裂**：由于底层未能正常触发真实的 `custom_tool_call` 事件流，Codex 桌面端**无法激活官方原生的 TurnDiff 文件变化卡片**（即带有文件路径标签、代码增减 `+1, -1` 徽章和图形化【打开/对比】按钮的高级对比界面），只能沦落为普通的聊天代码框；
+     - 🔄 **多轮补丁审查与反馈断流**：模型无法接收到系统针对 patch 执行状态的标准化结构化反馈（`custom_tool_call_output`），在多轮修改与复杂重构中极易陷入幻觉和状态丢失。
 2. **第三方代理拦截，导致官方 Pro 额度条与头像消失**：
    若直接使用第三方代理 API Key，Codex 会被强制设置为 API Key 模式，状态栏将无法显示官方 ChatGPT Pro 5 小时使用限额（Usage Limits）与头像。而如果开启 `auth_mode: "chatgpt"`，Codex 向本地代理发送的 ChatGPT OAuth JWT 令牌又会被代理视为无效凭证而返回 `401 Unauthorized`。
 3. **传统方案依赖外部脚本或修改内核，维护成本极高**：
@@ -28,13 +33,13 @@
 
 ## ✨ 核心功能
 
-### 1. 🛠️ 原生 `apply_patch` 工具调用闭环（Native Tool Calling & Execution）
-- **工具声明注入与适配**：在请求入站时，自动向外部模型注入符合 Codex V4A 补丁规范的标准 `apply_patch` 工具定义，使 Gemini、Claude、DeepSeek 等第三方模型能够精准识别并主动发起针对文件的增量修改调用；
+### 1. 🛠️ 原生 `apply_patch` Freeform 工具动态桥接与调用闭环
+- **Freeform ↔ Function Calling 双向桥接**：在请求入站时，自动将 Codex 的 `custom: apply_patch` Freeform 声明智能包装为外部模型认识的标准 JSON Schema 函数工具定义，使 Gemini、Claude、DeepSeek 能精准识别并主动发起行级别的精准差异修改；
 - **V4A 提示词智能增强**：自动注入 Unified Diff 格式指引，引导模型使用精准的行修改语法，告别全文件重写带来的性能损耗与上下文浪费；
 - **多轮会话参数与输出闭环**：模型调用 `apply_patch` 后，插件自动将客户端执行结果以 `custom_tool_call_output` 平滑映射回模型，确保多轮上下文持续感知修改结果与冲突。
 
 ### 2. 🎨 官方原生文件变化卡片（TurnDiff Native Card）
-- **双向协议转译**：在请求端将 Codex 的 `custom: apply_patch` 声明透明转换为通用模型支持的标准 Function Calling 格式，并注入 V4A Unified Diff 格式指引；
+- **协议层完美伪装**：将上游模型的标准函数调用，实时转译还原为 Codex 渲染引擎所要求的私有 Freeform 补丁调用；
 - **5 帧事件流重组**：在响应端实时截获上游模型的函数调用，精准重构为 Codex 渲染引擎严格要求的 5 帧原生 SSE 事件序列：
   - `response.output_item.added` (`type: "custom_tool_call"`)
   - `response.custom_tool_call_input.delta` (代码块增量)
