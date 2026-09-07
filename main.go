@@ -379,7 +379,7 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 			SchemaVersion: pluginabi.SchemaVersion,
 			Metadata: pluginapi.Metadata{
 				Name:             "apply_patch",
-				Version:          "1.2.0",
+				Version:          "1.2.1",
 				Author:           "codex-agent",
 				GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI",
 				Logo:             "",
@@ -475,6 +475,14 @@ func handleRequestInterceptBefore(raw []byte) ([]byte, error) {
 
 	body := req.Body
 	root := gjson.ParseBytes(body)
+
+	// 1. 如果请求发送给 OpenAI 原生模型 (GPT/o系列)，OpenAI 原生支持 Freeform apply_patch 与 ctco_*，
+	// 绝不能将其转换为 function_call / function_call_output，否则会触发 OpenAI 400 校验错误。
+	if isNativeOpenAIRoute(req, root) {
+		debugLog("handleRequestInterceptBefore: passthrough native OpenAI request (model=%s, toFormat=%s)", req.Model, req.ToFormat)
+		return okEnvelope(pluginapi.RequestInterceptResponse{})
+	}
+
 	modified := false
 
 	// Convert tools[type == "custom" && name == "apply_patch"] -> function tool
@@ -495,7 +503,7 @@ func handleRequestInterceptBefore(raw []byte) ([]byte, error) {
 		})
 	}
 
-	// Normalize input history items
+	// Normalize input history items for non-OpenAI models
 	if input := root.Get("input"); input.Exists() && input.IsArray() {
 		input.ForEach(func(i, item gjson.Result) bool {
 			itemType := item.Get("type").String()
@@ -503,18 +511,51 @@ func handleRequestInterceptBefore(raw []byte) ([]byte, error) {
 			if itemType == "custom_tool_call" {
 				name := item.Get("name").String()
 				callID := item.Get("call_id").String()
+				itemID := item.Get("id").String()
+				fcID := itemID
+				if strings.HasPrefix(fcID, "ctc_") {
+					fcID = "fc_" + fcID[4:]
+				} else if !strings.HasPrefix(fcID, "fc") {
+					fcID = "fc_" + callID
+				}
+
 				inputText := item.Get("input").String()
 				argsJSON, _ := sjson.SetBytes([]byte("{}"), "input", inputText)
 
 				body, _ = sjson.SetBytes(body, path+".type", "function_call")
+				body, _ = sjson.SetBytes(body, path+".id", fcID)
 				body, _ = sjson.SetBytes(body, path+".name", name)
 				body, _ = sjson.SetBytes(body, path+".call_id", callID)
 				body, _ = sjson.SetBytes(body, path+".arguments", string(argsJSON))
 				body, _ = sjson.DeleteBytes(body, path+".input")
 				modified = true
 			} else if itemType == "custom_tool_call_output" {
+				callID := item.Get("call_id").String()
+				itemID := item.Get("id").String()
+				fcID := itemID
+				if strings.HasPrefix(fcID, "ctco_") {
+					fcID = "fc_" + fcID[5:]
+				} else if !strings.HasPrefix(fcID, "fc") {
+					fcID = "fc_" + callID
+				}
+
 				body, _ = sjson.SetBytes(body, path+".type", "function_call_output")
+				body, _ = sjson.SetBytes(body, path+".id", fcID)
 				modified = true
+			} else if itemType == "function_call_output" {
+				// 容错修复历史中遗留的 ctco_ 前缀
+				itemID := item.Get("id").String()
+				if strings.HasPrefix(itemID, "ctco_") {
+					body, _ = sjson.SetBytes(body, path+".id", "fc_"+itemID[5:])
+					modified = true
+				}
+			} else if itemType == "function_call" {
+				// 容错修复历史中遗留的 ctc_ 前缀
+				itemID := item.Get("id").String()
+				if strings.HasPrefix(itemID, "ctc_") {
+					body, _ = sjson.SetBytes(body, path+".id", "fc_"+itemID[4:])
+					modified = true
+				}
 			}
 			return true
 		})
@@ -901,3 +942,39 @@ func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 	response.ptr = ptr
 	response.len = C.size_t(len(raw))
 }
+
+func isNativeOpenAIRoute(req pluginapi.RequestInterceptRequest, root gjson.Result) bool {
+	toFmt := strings.ToLower(strings.TrimSpace(req.ToFormat))
+	if toFmt == "openai-responses" || toFmt == "codex" || toFmt == "responses" {
+		return true
+	}
+
+	model := strings.ToLower(strings.TrimSpace(req.Model))
+	if model == "" {
+		model = strings.ToLower(strings.TrimSpace(req.RequestedModel))
+	}
+	if model == "" {
+		model = strings.ToLower(strings.TrimSpace(root.Get("model").String()))
+	}
+
+	if isGPTOrOSeries(model) {
+		if toFmt == "gemini" || toFmt == "gemini-interactions" || toFmt == "antigravity" || toFmt == "claude" {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+func isGPTOrOSeries(m string) bool {
+	if strings.HasPrefix(m, "gpt-") ||
+		strings.HasPrefix(m, "o1") ||
+		strings.HasPrefix(m, "o3") ||
+		strings.HasPrefix(m, "o4") ||
+		strings.HasPrefix(m, "chatgpt") ||
+		strings.HasPrefix(m, "openai/") {
+		return true
+	}
+	return false
+}
+
