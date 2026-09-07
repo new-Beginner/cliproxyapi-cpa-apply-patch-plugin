@@ -111,9 +111,58 @@ When connecting third-party LLMs (e.g. Google Gemini, Anthropic Claude, DeepSeek
                              │ Standard Function Calling
                              ▼
  ┌────────────────────────────────────────────────────────┐
- │     Upstream LLMs (Gemini 3.8 / Claude / DeepSeek)     │
- └────────────────────────────────────────────────────────┘
+│     Upstream LLMs (Gemini 3.8 / Claude / DeepSeek)     │
+└────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 🌐 Supported Protocols & Architectural Specifications
+
+This plugin implements a **multi-tiered bidirectional protocol translation architecture**, delivering full compatibility across client, gateway, and model boundaries:
+
+### 1. Downstream Client Protocols (Facing Codex Desktop / CLI)
+| Protocol Layer | Supported Standard | Mechanism & Description |
+| :--- | :--- | :--- |
+| **API Wire Protocol** | **OpenAI Responses API** (`POST /v1/responses`) | The core API transport between Codex and backend gateways |
+| **Data Transport Protocol** | **Server-Sent Events (SSE)** Streaming (`text/event-stream`) | Frame-by-frame interception, reconstruction, and multiplexing |
+| **Tool Call Protocol** | **Codex Proprietary Freeform Patch Protocol** (`type: "custom"`) | Unstructured freeform patch tool designed for OpenAI models |
+| **Event Lifecycle Stream** | **Codex 5-Frame Event Lifecycle Sequence** | Emulates the authentic event sequence required by Codex TurnDiff cards:<br>1. `response.output_item.added` (`type: "custom_tool_call"`)<br>2. `response.custom_tool_call_input.delta` (incremental diff delta)<br>3. `response.custom_tool_call_input.done` (patch payload finalized)<br>4. `response.output_item.done` (`status: "completed"`)<br>5. `response.completed` (turn output finalized) |
+| **Non-Streaming Protocol** | **JSON Response Output** (`output[].type: "custom_tool_call"`) | Full reconstruction of custom patch items in non-streaming responses |
+| **Context Relay Protocol** | `custom_tool_call` & `custom_tool_call_output` | Seamless history translation across multi-turn sessions |
+
+### 2. Tool Calling & Patch Specifications (Freeform ↔ Function Calling Dual-Bridge)
+| Specification | Supported Format | Features & Handling |
+| :--- | :--- | :--- |
+| **Patch Format** | **Codex V4A Unified Diff Specification** | Starts with `*** Begin Patch` and ends with `*** End Patch`. Supports `*** Add File:`, `*** Update File:`, `*** Delete File:`, and single-sided `@@` headers |
+| **Standard Tool Declaration**| **JSON Schema Function Calling** | Wraps `custom: apply_patch` into a standard `type: "function"` tool schema with parameters `{"input": {"type": "string"}}` |
+| **Argument Tolerance Extraction** | **Multi-Structure Unpacking + Unescaping** | Automatically parses and unescapes diverse model JSON outputs:<br>• `{"input": "..."}` (standard schema)<br>• `{"patch": "..."}` / `{"diff": "..."}`<br>• `{"content": "..."}` / `{"apply_patch": "..."}`<br>• Raw string containing `*** Begin Patch`<br>• Handles double-escaped `\n`, `\r`, `\"` safely |
+
+### 3. Upstream Model Protocols (Facing External LLMs)
+| Model Family / Channel | Upstream Protocol Format | Optimization & Adapter Behavior |
+| :--- | :--- | :--- |
+| **Google Gemini** | `gemini`, `gemini-interactions` native wire | Injects `functionDeclarations` and `systemInstruction.parts` V4A prompt guidelines |
+| **Google Antigravity** | `antigravity` (Cloud Code internal transport) | Adapts nested `request.tools` and `request.systemInstruction` hierarchies |
+| **Anthropic Claude** | Claude Messages API (`tools` / Tool Use) | Converted to standard schema on ingress, translated to Claude Tool Use by host |
+| **DeepSeek** | OpenAI Chat Completions / Responses | Converted to standard function tools, supporting DeepSeek native function calling |
+| **OpenAI-Compatible** | Standard OpenAI Compatible endpoints | Universal standard Function Calling support |
+
+### 4. Client Authentication Protocols (OAuth Relay)
+| Auth Protocol | Method & Source | Capabilities & Value |
+| :--- | :--- | :--- |
+| **ChatGPT OAuth JWT** | `Authorization: Bearer eyJ...` (RFC 7519 JWT) | **Key Feature**: Transparently approves Codex's ChatGPT OAuth token, **retaining the Pro 5-hour quota bar, avatar, and account tier in Codex** |
+| **Standard API Key** | `Authorization: Bearer sk-...` | Supports `sk-geminipro` and custom static keys from `config.yaml` |
+| **Multi-Header Compatibility**| `X-Api-Key`, `X-Goog-Api-Key`, URL Query `?key=...` | Accommodates various HTTP header conventions |
+
+### 5. Host Plugin Specification (CLIProxyAPI C ABI)
+Built on `github.com/router-for-me/CLIProxyAPI/v7` (aligned with v7.2.152):
+- **Exported C ABI Symbols**: `cliproxy_plugin_init`, `cliproxyPluginCall`, `cliproxyPluginFree`, `cliproxyPluginShutdown`
+- **Registered Capabilities**:
+  1. `FrontendAuthProvider` (`frontend_auth.*`): Inbound authentication & OAuth relay;
+  2. `RequestInterceptor` (`request.intercept_before` / `after`): Tool declaration & context translation;
+  3. `RequestNormalizer` (`request.normalize`): Upstream model prompt enhancement & declaration injection;
+  4. `StreamChunkInterceptor` (`response.intercept_stream_chunk`): Outbound 5-frame SSE stream repacking;
+  5. `ResponseInterceptor` (`response.intercept_after`): Non-streaming response payload adaptation.
 
 ---
 

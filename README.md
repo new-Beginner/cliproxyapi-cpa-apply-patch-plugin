@@ -110,9 +110,58 @@
                              │ 标准 Function Calling
                              ▼
  ┌────────────────────────────────────────────────────────┐
- │       上游大模型 (Gemini 3.8 / Claude / DeepSeek 等)   │
- └────────────────────────────────────────────────────────┘
+│       上游大模型 (Gemini 3.8 / Claude / DeepSeek 等)   │
+└────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 🌐 支持的协议与架构规范
+
+本插件采用**多层双向协议转译架构**，针对各端协议提供全方位原生支持与兼容：
+
+### 1. 客户端下行协议（面向 Codex 桌面端 / CLI）
+| 协议层级 | 支持的具体协议与规范 | 作用与机制 |
+| :--- | :--- | :--- |
+| **API 接口协议** | **OpenAI Responses API** (`POST /v1/responses`) | Codex 与后端交互的标准 API 传输通道 |
+| **数据传输协议** | **Server-Sent Events (SSE)** 流式传输 (`text/event-stream`) | 逐帧动态截获、重构与分发 SSE 事件流 |
+| **工具下行协议** | **Codex 专有 Freeform Patch 协议** (`type: "custom"`) | Codex 专为自身模型设计的高级自由补丁工具格式 |
+| **事件流时序协议** | **Codex 原生 5 帧补丁生命周期事件序列** | 精确模拟官方模型序列以激活 TurnDiff 卡片：<br>1. `response.output_item.added` (`type: "custom_tool_call"`)<br>2. `response.custom_tool_call_input.delta` (差异流式增量)<br>3. `response.custom_tool_call_input.done` (补丁数据封包)<br>4. `response.output_item.done` (`status: "completed"`)<br>5. `response.completed` (会话输出项重构) |
+| **非流式响应协议** | **JSON Response Output** (`output[].type: "custom_tool_call"`) | 非流式请求下的补丁对象完整重构 |
+| **上下文回传协议** | `custom_tool_call` 与 `custom_tool_call_output` | 多轮历史对话中的补丁调用与执行结果平滑兼容 |
+
+### 2. 工具调用与补丁规范协议（Freeform ↔ Function Calling 桥接）
+| 补丁与工具规范 | 支持格式 | 详细机制与特性 |
+| :--- | :--- | :--- |
+| **补丁文本规范** | **Codex V4A Unified Diff 格式** | 严格遵循以 `*** Begin Patch` 开头、`*** End Patch` 结尾，支持 `*** Add File:`、`*** Update File:`、`*** Delete File:` 及单侧 `@@` 差异语法 |
+| **标准工具声明** | **JSON Schema Function Calling** | 在请求入站时将 `custom: apply_patch` 包装为标准的 `type: "function"`，入参规范定义为 `{"input": {"type": "string"}}` |
+| **参数容错提取协议** | **多结构自动解包 + 转义自动还原** | 模型可能输出不同格式的 JSON，插件自动兼容：<br>• `{"input": "..."}`（官方标准格式）<br>• `{"patch": "..."}` / `{"diff": "..."}`<br>• `{"content": "..."}` / `{"apply_patch": "..."}`<br>• 裸文本/直接附带 `*** Begin Patch` 的字符串<br>• 自动还原 `\n`、`\r`、`\"` 双重转义 |
+
+### 3. 模型端上游协议（面向各类主流大模型）
+| 模型厂商 / 通道 | 支持的上游协议类型 | 专属优化处理与特性 |
+| :--- | :--- | :--- |
+| **Google Gemini** | `gemini`、`gemini-interactions` 原生协议 | 自动注入 `functionDeclarations` 与 `systemInstruction.parts` V4A 补丁格式约束指令 |
+| **Google Antigravity** | `antigravity` (Cloud Code 专有内部通道) | 自动适配嵌套的 `request.tools` 与 `request.systemInstruction` 结构 |
+| **Anthropic Claude** | Claude Messages API (`tools` / Tool Use 规范) | 在入站前已转为通用标准工具定义，经代理内核无缝转译为 Claude Tool Use |
+| **DeepSeek** | OpenAI Chat Completions / Responses 协议 | 转换为标准 `tools: [{"type": "function", ...}]`，支持 DeepSeek 原生函数调用 |
+| **OpenAI-Compatible** | 通用 OpenAI 兼容接口 | 标准 Function Calling 通用支持 |
+
+### 4. 客户端鉴权与中继协议（OAuth Relay）
+| 认证协议 | 鉴权方式与来源 | 效果与能力 |
+| :--- | :--- | :--- |
+| **ChatGPT OAuth JWT** | `Authorization: Bearer eyJ...` (RFC 7519 JWT) | **核心特性**：自动放行 Codex 发送的官方 ChatGPT OAuth 令牌，**保持 Codex 桌面端 Pro 5 小时限额额度条、用户头像与官方服务** |
+| **标准 API Key** | `Authorization: Bearer sk-...` | 支持 `sk-geminipro` 及用户在 `config.yaml` 中配置的自定义静态密钥 |
+| **多字段凭证兼容** | `X-Api-Key`、`X-Goog-Api-Key`、URL Query `?key=...` | 兼容各类客户端与第三方工具的请求头鉴权风格 |
+
+### 5. 宿主插件底层契约（CLIProxyAPI C ABI）
+基于 `github.com/router-for-me/CLIProxyAPI/v7`（当前对齐 v7.2.152）官方插件规范构建：
+- **C ABI 动态导出**：`cliproxy_plugin_init`、`cliproxyPluginCall`、`cliproxyPluginFree`、`cliproxyPluginShutdown`
+- **生命周期拦截器挂载**：
+  1. `FrontendAuthProvider` (`frontend_auth.*`)：前端流量认证与 OAuth 中继；
+  2. `RequestInterceptor` (`request.intercept_before` / `after`)：入站工具与多轮历史转译；
+  3. `RequestNormalizer` (`request.normalize`)：上游模型专有工具声明与提示词增强；
+  4. `StreamChunkInterceptor` (`response.intercept_stream_chunk`)：出站流式 5 帧补丁重组；
+  5. `ResponseInterceptor` (`response.intercept_after`)：非流式完整响应重构。
 
 ---
 
